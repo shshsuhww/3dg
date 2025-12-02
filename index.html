@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>3D FPS & Driving Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: #020617;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #e5e7eb;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, rgba(15,23,42,0.95), #020617 70%);
+      flex-direction: column;
+      text-align: center;
+      z-index: 10;
+      cursor: pointer;
+    }
+
+    #overlay h1 {
+      margin-bottom: 8px;
+      font-size: 26px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #overlay p {
+      margin: 4px 0;
+      font-size: 14px;
+      color: #9ca3af;
+    }
+
+    #hud {
+      position: fixed;
+      left: 12px;
+      bottom: 12px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(15,23,42,0.8);
+      border: 1px solid rgba(55,65,81,0.8);
+      font-size: 12px;
+      z-index: 5;
+    }
+
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 12px;
+      height: 12px;
+      margin-left: -6px;
+      margin-top: -6px;
+      pointer-events: none;
+      z-index: 4;
+    }
+
+    #crosshair::before,
+    #crosshair::after {
+      content: "";
+      position: absolute;
+      background: #f9fafb;
+      opacity: 0.9;
+    }
+
+    #crosshair::before {
+      width: 1px;
+      height: 12px;
+      left: 5.5px;
+      top: 0;
+    }
+
+    #crosshair::after {
+      width: 12px;
+      height: 1px;
+      left: 0;
+      top: 5.5px;
+    }
+
+    #info {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(15,23,42,0.8);
+      border: 1px solid rgba(55,65,81,0.8);
+      font-size: 11px;
+      color: #9ca3af;
+      z-index: 5;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <h1>FPS & Driving</h1>
+    <p>Klicke, um das Spiel zu starten</p>
+    <p>Steuerung:</p>
+    <p>WASD = bewegen · Maus = umschauen · Klick = schießen</p>
+    <p>E = in Auto ein-/aussteigen · Im Auto: W/S fahren, A/D lenken</p>
+  </div>
+
+  <div id="hud">
+    Modus: <span id="modeText">Zu Fuß</span><br>
+    Gegner: <span id="enemyCount">0</span>
+  </div>
+
+  <div id="info">
+    ⎋ ESC = Maus freigeben<br>
+    Desktop-Browser empfohlen (Chrome/Edge/Firefox)
+  </div>
+
+  <div id="crosshair"></div>
+
+  <!-- Three.js + Controls (ohne Module) -->
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/PointerLockControls.js"></script>
+
+  <script>
+    let camera, scene, renderer;
+    let controls;
+    const clock = new THREE.Clock();
+
+    // Movement
+    let moveForward = false;
+    let moveBackward = false;
+    let moveLeft = false;
+    let moveRight = false;
+    let canJump = false;
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+
+    // Game objects
+    const enemies = [];
+    let car;
+    let inCar = false;
+    let carSpeed = 0;
+    let carAngle = 0;
+
+    const modeText = document.getElementById("modeText");
+    const enemyCountEl = document.getElementById("enemyCount");
+    const overlay = document.getElementById("overlay");
+
+    init();
+    animate();
+
+    function init() {
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x020617);
+      scene.fog = new THREE.Fog(0x020617, 50, 300);
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+
+      // Controls
+      controls = new THREE.PointerLockControls(camera, document.body);
+      controls.getObject().position.set(0, 1.8, 5);
+      scene.add(controls.getObject());
+
+      // Pointer lock
+      overlay.addEventListener("click", function () {
+        controls.lock();
+      });
+
+      controls.addEventListener("lock", function () {
+        overlay.style.display = "none";
+      });
+
+      controls.addEventListener("unlock", function () {
+        overlay.style.display = "flex";
+      });
+
+      // Lights
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x111322, 0.4);
+      hemiLight.position.set(0, 60, 0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      dirLight.position.set(40, 80, 20);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
+      dirLight.shadow.camera.near = 0.5;
+      dirLight.shadow.camera.far = 200;
+      dirLight.shadow.camera.left = -80;
+      dirLight.shadow.camera.right = 80;
+      dirLight.shadow.camera.top = 80;
+      dirLight.shadow.camera.bottom = -80;
+      scene.add(dirLight);
+
+      // Ground
+      const groundGeo = new THREE.PlaneGeometry(400, 400);
+      const groundMat = new THREE.MeshStandardMaterial({
+        color: 0x1f2933,
+        roughness: 0.9,
+        metalness: 0.1
+      });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // Simple "city" boxes
+      const buildingGeo = new THREE.BoxGeometry(8, 20, 8);
+      const buildingMat = new THREE.MeshStandardMaterial({
+        color: 0x111827,
+        roughness: 0.8,
+        metalness: 0.2
+      });
+
+      for (let i = 0; i < 25; i++) {
+        const b = new THREE.Mesh(buildingGeo, buildingMat);
+        const x = (Math.random() - 0.5) * 300;
+        const z = (Math.random() - 0.5) * 300;
+        b.position.set(x, 10, z);
+        b.castShadow = true;
+        b.receiveShadow = true;
+        scene.add(b);
+      }
+
+      // Car
+      const carGeo = new THREE.BoxGeometry(2, 1, 4);
+      const carMat = new THREE.MeshStandardMaterial({
+        color: 0x9ca3af,
+        metalness: 0.5,
+        roughness: 0.4
+      });
+      car = new THREE.Mesh(carGeo, carMat);
+      car.castShadow = true;
+      car.receiveShadow = true;
+      car.position.set(5, 0.5, 0);
+      scene.add(car);
+
+      // Enemies
+      const enemyGeo = new THREE.BoxGeometry(1, 2, 1);
+      const enemyMat = new THREE.MeshStandardMaterial({
+        color: 0xef4444,
+        metalness: 0.2,
+        roughness: 0.6
+      });
+
+      for (let i = 0; i < 10; i++) {
+        const e = new THREE.Mesh(enemyGeo, enemyMat.clone());
+        e.castShadow = true;
+        e.receiveShadow = true;
+        const x = (Math.random() - 0.5) * 100;
+        const z = (Math.random() - 0.5) * 100;
+        e.position.set(x, 1, z);
+        e.userData = {
+          offset: Math.random() * Math.PI * 2,
+          speed: 0.5 + Math.random()
+        };
+        scene.add(e);
+        enemies.push(e);
+      }
+      enemyCountEl.textContent = enemies.length;
+
+      // Events
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+
+      // Shooting
+      document.addEventListener("mousedown", function (event) {
+        if (event.button === 0 && controls.isLocked) {
+          shoot();
+        }
+      });
+
+      window.addEventListener("resize", onWindowResize);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onKeyDown(event) {
+      switch (event.code) {
+        case "ArrowUp":
+        case "KeyW":
+          moveForward = true;
+          break;
+        case "ArrowLeft":
+        case "KeyA":
+          moveLeft = true;
+          break;
+        case "ArrowDown":
+        case "KeyS":
+          moveBackward = true;
+          break;
+        case "ArrowRight":
+        case "KeyD":
+          moveRight = true;
+          break;
+        case "Space":
+          if (!inCar && canJump === true) {
+            velocity.y += 5;
+            canJump = false;
+          }
+          break;
+        case "KeyE":
+          toggleCar();
+          break;
+      }
+    }
+
+    function onKeyUp(event) {
+      switch (event.code) {
+        case "ArrowUp":
+        case "KeyW":
+          moveForward = false;
+          break;
+        case "ArrowLeft":
+        case "KeyA":
+          moveLeft = false;
+          break;
+        case "ArrowDown":
+        case "KeyS":
+          moveBackward = false;
+          break;
+        case "ArrowRight":
+        case "KeyD":
+          moveRight = false;
+          break;
+      }
+    }
+
+    function toggleCar() {
+      const playerPos = controls.getObject().position;
+      const dist = playerPos.distanceTo(car.position);
+
+      if (!inCar) {
+        if (dist > 4) return;
+        inCar = true;
+        modeText.textContent = "Im Auto";
+        controls.getObject().position.set(
+          car.position.x,
+          car.position.y + 1.4,
+          car.position.z
+        );
+        carSpeed = 0;
+      } else {
+        inCar = false;
+        modeText.textContent = "Zu Fuß";
+        controls.getObject().position.set(
+          car.position.x + 2,
+          1.8,
+          car.position.z + 2
+        );
+        carSpeed = 0;
+      }
+    }
+
+    function shoot() {
+      const raycaster = new THREE.Raycaster();
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      raycaster.set(camera.position, dir);
+
+      const intersects = raycaster.intersectObjects(enemies, false);
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        scene.remove(hit);
+        const idx = enemies.indexOf(hit);
+        if (idx !== -1) enemies.splice(idx, 1);
+        enemyCountEl.textContent = enemies.length;
+      }
+    }
+
+    function updateEnemies(delta) {
+      const t = performance.now() * 0.001;
+      enemies.forEach(function (e) {
+        const speed = e.userData.speed;
+        const offset = e.userData.offset;
+        e.position.x += Math.sin(t * speed + offset) * delta * 2;
+        e.position.z += Math.cos(t * speed + offset) * delta * 2;
+      });
+    }
+
+    function updateCar(delta) {
+      const accel = 8;
+      const friction = 3;
+      const maxSpeed = 25;
+      const turnSpeed = 1.8;
+
+      if (moveForward) carSpeed += accel * delta;
+      if (moveBackward) carSpeed -= accel * delta;
+
+      if (carSpeed > maxSpeed) carSpeed = maxSpeed;
+      if (carSpeed < -maxSpeed) carSpeed = -maxSpeed;
+
+      if (!moveForward && !moveBackward) {
+        if (carSpeed > 0) {
+          carSpeed = Math.max(0, carSpeed - friction * delta);
+        } else if (carSpeed < 0) {
+          carSpeed = Math.min(0, carSpeed + friction * delta);
+        }
+      }
+
+      if (carSpeed !== 0) {
+        if (moveLeft) {
+          carAngle += turnSpeed * delta * (carSpeed > 0 ? 1 : -1);
+        }
+        if (moveRight) {
+          carAngle -= turnSpeed * delta * (carSpeed > 0 ? 1 : -1);
+        }
+      }
+
+      const forward = new THREE.Vector3(
+        Math.sin(carAngle),
+        0,
+        Math.cos(carAngle)
+      );
+      car.position.addScaledVector(forward, carSpeed * delta);
+      car.rotation.y = carAngle;
+
+      const camPos = new THREE.Vector3().copy(car.position);
+      camPos.y += 1.4;
+      camPos.addScaledVector(forward, -0.3);
+      controls.getObject().position.copy(camPos);
+    }
+
+    function updatePlayer(delta) {
+      const damping = 10.0;
+      const walkSpeed = 25.0;
+
+      velocity.x -= velocity.x * damping * delta;
+      velocity.z -= velocity.z * damping * delta;
+      velocity.y -= 9.8 * 5.0 * delta;
+
+      direction.z = Number(moveForward) - Number(moveBackward);
+      direction.x = Number(moveRight) - Number(moveLeft);
+      direction.normalize();
+
+      if (moveForward || moveBackward) velocity.z -= direction.z * walkSpeed * delta;
+      if (moveLeft || moveRight) velocity.x -= direction.x * walkSpeed * delta;
+
+      controls.moveRight(-velocity.x * delta);
+      controls.moveForward(-velocity.z * delta);
+
+      const y = controls.getObject().position.y + velocity.y * delta;
+
+      if (y < 1.8) {
+        velocity.y = 0;
+        controls.getObject().position.y = 1.8;
+        canJump = true;
+      } else {
+        controls.getObject().position.y = y;
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+
+      if (controls.isLocked) {
+        updateEnemies(delta);
+        if (inCar) {
+          updateCar(delta);
+        } else {
+          updatePlayer(delta);
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
